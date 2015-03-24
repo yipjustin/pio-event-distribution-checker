@@ -1,0 +1,11 @@
+{
+  "id": "default",
+  "description": "Default settings",
+  "engineFactory": "io.prediction.e2.eventdistributionchecker.VanillaEngine",
+  "datasource": {
+    "params" : {
+      "appId": 11,
+      "sample": 0
+    }
+  }
+}
