@@ -92,8 +92,10 @@ object AggEvent {
     logger.info(frame.stringify(frame.numRows))
 
     m.foreach { case (key, (count, events)) => 
-      logger.info(s"Key: $key")
-      events.foreach { e => logger.info(s"  $e") }
+      if (events.size > 0) { 
+        logger.info(s"Key: $key")
+        events.foreach { e => logger.info(s"  $e") }
+      }
     }
   }
 
