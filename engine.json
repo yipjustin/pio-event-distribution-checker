@@ -4,8 +4,9 @@
   "engineFactory": "io.prediction.e2.eventdistributionchecker.VanillaEngine",
   "datasource": {
     "params" : {
-      "appId": 11,
-      "sample": 0
+      "appId": 12,
+      "sample": 0,
+      "dateKey": "yyyy-MM"
     }
   }
 }

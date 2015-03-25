@@ -29,11 +29,12 @@ import org.apache.spark.mllib.stat.{MultivariateStatisticalSummary, Statistics}
 import org.apache.spark.mllib.linalg.Vectors
 import org.joda.time.Days
 import org.joda.time.Hours
-
+import scala.reflect.ClassTag
 
 case class DataSourceParams(
     appId: Int,
-    sample: Option[Int]
+    sample: Option[Int],  // # of sample events for each key
+    dateKey: Option[String]  // define the granularity of date. Default is yyyy-MM
 ) extends Params
 
 
@@ -41,51 +42,48 @@ abstract class AbstractChecker extends Serializable {
   def check(): Unit
 } 
 
-class BasicChecker(ds: DataSource, eventsRDD: RDD[Event], sample: Option[Int])
+class BasicChecker(dsp: DataSourceParams, inputEventsRDD: RDD[Event])
     extends AbstractChecker {
   @transient lazy val logger = Logger[this.type]
 
   import io.prediction.e2.eventdistributionchecker.AggEvent.rddToEventRDD
   import io.prediction.e2.eventdistributionchecker.AggEvent.rddToKeyedEventRDD
-  
-  val _sample = sample.getOrElse(0)
-  
-  val fTypeDist: FutureAction[Seq[((String, Option[String]), AggEvent.Result)]] =
-  eventsRDD
-  .map(e => ((e.entityType, e.targetEntityType), e))
-  .countAndSample(_sample)
-  .collectAsync()
 
-  val fEventTimeDist = eventsRDD
-    .map{ e => (e.eventTime.toString("yyyy-MM"), e) }
+  // Only take whatever needed for this checker, and cache it.
+  val eventsRDD: RDD[Event] = inputEventsRDD.map { e => 
+    new Event(
+      eventId = e.eventId,
+      event = e.event,
+      entityType = e.entityType,
+      entityId = e.entityId,
+      targetEntityType = e.targetEntityType,
+      targetEntityId = e.targetEntityId,
+      eventTime = e.eventTime,
+      prId = e.prId,
+      creationTime = e.creationTime)
+  }
+  .setName("BasicChecker.eventsRDD")
+  
+  val _sample = dsp.sample.getOrElse(0)
+  val sample = _sample
+  val dateKey = dsp.dateKey.getOrElse("yyyy-MM")
+
+  @transient val fDist = eventsRDD
+    .flatMap { e => Seq(
+      ("1. Total", e),
+      (("2. Type", e.entityType, e.targetEntityType), e),
+      (("3. Time", e.eventTime.toString(dateKey)), e),
+      (("4. TimeNameType", e.eventTime.toString(dateKey), e.event, 
+        e.entityType, e.targetEntityType), e)) }
     .countAndSample(_sample)
     .collectAsync()
-
-  val fEventTimeNameDist = eventsRDD
-    .map{ e => ((e.eventTime.toString("yyyy-MM"), e.event), e) }
-    .countAndSample(_sample)
-    .collectAsync()
-
-  val fEventTimeNameTypeDist = eventsRDD
-    .map{ e => 
-      ((e.eventTime.toString("yyyy-MM"), e.event, e.entityType, e.targetEntityType), e)
-    }
-    .countAndSample(_sample)
-    .collectAsync()
   
-  val fTypeDistinctId = EventUtils.distinctEntityId(
+  @transient val fTypeDistinctId = EventUtils.distinctEntityId(
     eventsRDD, _.entityType).collectAsync()
 
   def check(): Unit = {
-    logger.info("Entity Type Distribution")
-    AggEvent.print(fTypeDist.get(), true)
-
-
-    logger.info("Event Time Distribution")
-    AggEvent.print(fEventTimeDist.get(), true)
-
-    logger.info("Event (Time, Name, EntityType, TargetEntityType) Distribution")
-    AggEvent.print(fEventTimeNameTypeDist.get(), true)
+    logger.info("Event Distribution")
+    AggEvent.print(fDist.get(), true)
     
     logger.info("Event (EntityType) Distinct Id")
     val typeDistinctIdStats = EventUtils.distStats(fTypeDistinctId.get(), true)
@@ -104,13 +102,9 @@ class DataSource(val dsp: DataSourceParams)
   override
   def readTraining(sc: SparkContext): TrainingData = {
     val eventsRDD: RDD[Event] = eventsDb.find(appId = dsp.appId)(sc)
-      .setName("EventsRDD")
-      .cache
-
-    logger.info(s"EventsCount: ${eventsRDD.count}")
 
     val checkers = Seq[AbstractChecker](
-      new BasicChecker(this, eventsRDD, sample=dsp.sample)
+      new BasicChecker(dsp, eventsRDD)
     )
 
     checkers.foreach(_.check)
